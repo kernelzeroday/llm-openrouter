@@ -163,26 +163,45 @@ def register_commands(cli):
     def openrouter():
         "Commands relating to the llm-openrouter plugin"
 
-    @openrouter.command()
-    @click.option("--free", is_flag=True, help="List free models")
-    @click.option("json_", "--json", is_flag=True, help="Output as JSON")
-    def models(free, json_):
+    @openrouter.group()
+    def models():
         "List of OpenRouter models"
+
+    # Subcommand to match 'llm models list' usage pattern
+    @models.command("list")
+    @click.option("--free", is_flag=True, help="List only models that are free based on pricing (all non-zero costs excluded)")
+    @click.option("json_", "--json", is_flag=True, help="Output as JSON")
+    def models_list(free, json_):
+        def is_model_free(model):
+            pricing = model.get("pricing") or {}
+            numeric_values = []
+            for k, v in pricing.items():
+                try:
+                    numeric_values.append(float(v))
+                except Exception:
+                    continue
+            if not numeric_values:
+                return False
+            for x in numeric_values:
+                if x != 0.0:
+                    return False
+            return True
+
+        all_models = get_openrouter_models()
         if free:
-            all_models = [
-                model
-                for model in get_openrouter_models()
-                if model["id"].endswith(":free")
-            ]
-        else:
-            all_models = get_openrouter_models()
+            all_models = [m for m in all_models if is_model_free(m)]
         if json_:
-            click.echo(json.dumps(all_models, indent=2))
+            out = []
+            for m in all_models:
+                mm = dict(m)
+                mm["free"] = is_model_free(m)
+                out.append(mm)
+            click.echo(json.dumps(out, indent=2))
         else:
-            # Custom format
             for model in all_models:
                 bits = []
-                bits.append(f"- id: {model['id']}")
+                free_tag = " [FREE]" if is_model_free(model) else ""
+                bits.append(f"- id: {model['id']}{free_tag}")
                 bits.append(f"  name: {model['name']}")
                 bits.append(f"  context_length: {model['context_length']:,}")
                 architecture = model.get("architecture", None)
