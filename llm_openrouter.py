@@ -95,6 +95,7 @@ def register_models(register):
             model_name=model_definition["id"],
             vision=supports_images,
             supports_schema=model_definition["supports_schema"],
+            supports_tools=True,
             api_base="https://openrouter.ai/api/v1",
             headers={"HTTP-Referer": "https://llm.datasette.io/", "X-Title": "LLM"},
         )
