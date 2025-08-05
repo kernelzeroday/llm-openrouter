@@ -10,19 +10,28 @@ import httpx
 
 
 def get_openrouter_models():
-    models = fetch_cached_json(
+    models_data = fetch_cached_json(
         url="https://openrouter.ai/api/v1/models",
         path=llm.user_dir() / "openrouter_models.json",
         cache_timeout=3600,
-    )["data"]
-    schema_supporting_ids = {
-        model["id"]
-        for model in fetch_cached_json(
-            url="https://openrouter.ai/api/v1/models?supported_parameters=structured_outputs",
-            path=llm.user_dir() / "openrouter_models_structured_outputs.json",
-            cache_timeout=3600,
-        )["data"]
-    }
+    )
+    # Handle case where fetch_cached_json returns None or missing "data" key
+    if models_data is None or "data" not in models_data:
+        return []
+    models = models_data["data"]
+    schema_supporting_data = fetch_cached_json(
+        url="https://openrouter.ai/api/v1/models?supported_parameters=structured_outputs",
+        path=llm.user_dir() / "openrouter_models_structured_outputs.json",
+        cache_timeout=3600,
+    )
+    # Handle case where fetch_cached_json returns None or missing "data" key
+    if schema_supporting_data is None or "data" not in schema_supporting_data:
+        schema_supporting_ids = set()
+    else:
+        schema_supporting_ids = {
+            model["id"]
+            for model in schema_supporting_data["data"]
+        }
     # Annotate models with their schema support
     for model in models:
         model["supports_schema"] = model["id"] in schema_supporting_ids
@@ -54,6 +63,9 @@ class _mixin:
 
     def build_kwargs(self, prompt, stream):
         kwargs = super().build_kwargs(prompt, stream)
+        # Handle case where super().build_kwargs returns None
+        if kwargs is None:
+            kwargs = {}
         kwargs.pop("provider", None)
         kwargs.pop("online", None)
         extra_body = {}
@@ -121,8 +133,14 @@ def fetch_cached_json(url, path, cache_timeout):
         # Check if it's more than the cache_timeout old
         if time.time() - mod_time < cache_timeout:
             # If not, load the file
-            with open(path, "r") as file:
-                return json.load(file)
+            try:
+                with open(path, "r") as file:
+                    data = json.load(file)
+                    # Handle case where json.load returns None
+                    return data if data is not None else {}
+            except (json.JSONDecodeError, FileNotFoundError):
+                # If there's an error loading the file, continue to download
+                pass
 
     # Try to download the data
     try:
@@ -130,27 +148,47 @@ def fetch_cached_json(url, path, cache_timeout):
         response.raise_for_status()  # This will raise an HTTPError if the request fails
 
         # If successful, write to the file
+        response_data = response.json()
         with open(path, "w") as file:
-            json.dump(response.json(), file)
+            json.dump(response_data, file)
 
-        return response.json()
-    except httpx.HTTPError:
+        # Handle case where response.json() returns None
+        return response_data if response_data is not None else {}
+    except (httpx.HTTPError, json.JSONDecodeError):
         # If there's an existing file, load it
         if path.is_file():
-            with open(path, "r") as file:
-                return json.load(file)
-        else:
-            # If not, raise an error
-            raise DownloadError(
-                f"Failed to download data and no cache is available at {path}"
-            )
+            try:
+                with open(path, "r") as file:
+                    data = json.load(file)
+                    # Handle case where json.load returns None
+                    return data if data is not None else {}
+            except (json.JSONDecodeError, FileNotFoundError):
+                # If there's an error loading the file, raise an error
+                pass
+        
+        # If not, raise an error
+        raise DownloadError(
+            f"Failed to download data and no cache is available at {path}"
+        )
 
 
 def get_supports_images(model_definition):
     try:
-        # e.g. `text->text` or `text+image->text`
-        modality = model_definition["architecture"]["modality"]
+        # Handle case where model_definition is None
+        if model_definition is None:
+            return False
+        
+        # Handle case where "architecture" key is missing or None
+        architecture = model_definition.get("architecture")
+        if architecture is None:
+            return False
+        
+        # Handle case where "modality" key is missing or None
+        modality = architecture.get("modality")
+        if modality is None:
+            return False
 
+        # e.g. `text->text` or `text+image->text`
         input_modalities = modality.split("->")[0].split("+")
         return "image" in input_modalities
     except Exception:
@@ -235,7 +273,14 @@ def register_commands(cli):
 
 def format_price(key, price_str):
     """Format a price value with appropriate scaling and no trailing zeros."""
-    price = float(price_str)
+    # Handle case where price_str is None
+    if price_str is None:
+        return None
+    
+    try:
+        price = float(price_str)
+    except (ValueError, TypeError):
+        return None
 
     if price == 0:
         return None
@@ -269,6 +314,10 @@ def format_price(key, price_str):
 
 
 def format_pricing(pricing_dict):
+    # Handle case where pricing_dict is None
+    if pricing_dict is None:
+        return ""
+    
     formatted_parts = []
     for key, value in pricing_dict.items():
         formatted_price = format_price(key, value)
